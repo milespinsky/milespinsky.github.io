@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NFL Monte Carlo Season Simulator</title>
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #121821; --line: #1f2a37; --text: #d7dee8;
+    --dim: #7b8794; --accent: #ffb000; --good: #3ddc84; --bad: #ff5c5c;
+    --mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 14px; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 20px 60px; }
+  h1 { color: var(--accent); font-size: 22px; margin: 0 0 4px; letter-spacing: .5px; }
+  .sub { color: var(--dim); margin-bottom: 24px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; background: var(--panel);
+    border: 1px solid var(--line); padding: 14px 16px; margin-bottom: 20px; }
+  label { color: var(--dim); }
+  select, input { background: var(--bg); color: var(--text); border: 1px solid var(--line); padding: 6px 8px; font-family: var(--mono); }
+  button { background: var(--accent); color: #000; border: 0; padding: 8px 16px; font-family: var(--mono); font-weight: 700; cursor: pointer; }
+  button:hover { filter: brightness(1.1); }
+  #status { color: var(--dim); margin-left: auto; }
+  .grid { display: grid; grid-template-columns: 1fr 320px; gap: 20px; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); }
+  th, td { padding: 7px 10px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--dim); font-weight: 400; cursor: pointer; user-select: none; position: sticky; top: 0; background: var(--panel); }
+  th:first-child, td:first-child { text-align: left; }
+  tr:hover td { background: #17202b; }
+  tr.sel td { background: #1d2733; }
+  td.team { cursor: pointer; }
+  .div { color: var(--dim); font-size: 12px; }
+  .bar { display: inline-block; height: 8px; background: var(--accent); vertical-align: middle; margin-left: 6px; opacity: .8; }
+  .panel { background: var(--panel); border: 1px solid var(--line); padding: 16px; }
+  .panel h2 { font-size: 15px; color: var(--accent); margin: 0 0 12px; }
+  .hist { display: flex; align-items: flex-end; gap: 3px; height: 160px; border-bottom: 1px solid var(--line); }
+  .hist div { flex: 1; background: var(--accent); opacity: .85; min-height: 1px; }
+  .hist-x { display: flex; gap: 3px; color: var(--dim); font-size: 10px; margin-top: 4px; }
+  .hist-x span { flex: 1; text-align: center; }
+  .stat { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed var(--line); }
+  .stat b { color: var(--text); }
+  .method { margin-top: 28px; color: var(--dim); line-height: 1.6; }
+  .method h2 { color: var(--accent); font-size: 15px; }
+  .method code { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>&gt; NFL SEASON SIMULATOR</h1>
+  <div class="sub">Monte Carlo playoff odds &middot; data as of Nov 11, 2026</div>
+
+  <div class="controls">
+    <label>Conference
+      <select id="conf"><option value="ALL">All</option><option>AFC</option><option>NFC</option></select>
+    </label>
+    <label>Simulations
+      <select id="nsims"><option>1000</option><option selected>10000</option><option>50000</option></select>
+    </label>
+    <button id="run">RUN SIMULATION</button>
+    <span id="status"></span>
+  </div>
+
+  <div class="grid">
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr>
+          <th data-k="name">Team</th>
+          <th data-k="rec">Record</th>
+          <th data-k="projW">Proj W</th>
+          <th data-k="playoff">Playoffs</th>
+          <th data-k="div">Win Div</th>
+          <th data-k="seed1">#1 Seed</th>
+          <th data-k="sb">Win SB</th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <div class="panel" id="detail">
+      <h2 id="d-title">Click a team</h2>
+      <div class="hist" id="hist"></div>
+      <div class="hist-x" id="histx"></div>
+      <div id="d-stats" style="margin-top:14px"></div>
+    </div>
+  </div>
+
+  <div class="method">
+    <h2>How it works</h2>
+    <p>1. <b>Rate every team.</b> Start from win percentage, pulled toward .500
+       (a 7-1 start partly reflects luck). Convert that to a strength score on the log-odds scale.</p>
+    <p>2. <b>Price each game.</b> Win probability = logistic(home strength &minus; away strength + home-field edge).</p>
+    <p>3. <b>Simulate the season.</b> Flip a weighted coin for every remaining game. Games not yet on the
+       schedule below are played against a league-average opponent.</p>
+    <p>4. <b>Add uncertainty.</b> Each simulated season, team strengths get random noise, because we
+       don't know any team's true strength.</p>
+    <p>5. <b>Seed the playoffs.</b> 4 division winners + 3 wild cards per conference, then simulate the
+       bracket through the Super Bowl.</p>
+    <p>6. <b>Repeat 10,000 times</b> and count. If a team makes the playoffs in 6,200 seasons, that's 62%.</p>
+    <p>Simplifications: ties in the standings are broken by coin flip (not official NFL tiebreakers);
+       no injuries or rest; ties in individual games aren't simulated.</p>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   DATA — update this section each week.
+   ===================================================================== */
+
+// [abbr, name, conference, division, wins, losses, ties]
+const TEAMS = [
+  ["BUF","Bills","AFC","East",7,1,0], ["NE","Patriots","AFC","East",5,4,0],
+  ["NYJ","Jets","AFC","East",2,7,0],  ["MIA","Dolphins","AFC","East",1,7,0],
+  ["PIT","Steelers","AFC","North",6,2,0], ["CIN","Bengals","AFC","North",6,2,0],
+  ["CLE","Browns","AFC","North",5,4,0],   ["BAL","Ravens","AFC","North",4,5,0],
+  ["JAC","Jaguars","AFC","South",6,2,0], ["HOU","Texans","AFC","South",3,5,0],
+  ["IND","Colts","AFC","South",2,7,0],   ["TEN","Titans","AFC","South",1,7,0],
+  ["DEN","Broncos","AFC","West",7,2,0], ["KC","Chiefs","AFC","West",6,2,0],
+  ["LV","Raiders","AFC","West",4,5,0],  ["LAC","Chargers","AFC","West",0,8,0],
+  ["NYG","Giants","NFC","East",5,2,1], ["DAL","Cowboys","NFC","East",4,5,0],
+  ["WAS","Commanders","NFC","East",2,5,1], ["PHI","Eagles","NFC","East",2,7,0],
+  ["CHI","Bears","NFC","North",7,2,0], ["MIN","Vikings","NFC","North",6,2,0],
+  ["DET","Lions","NFC","North",6,2,0], ["GB","Packers","NFC","North",6,3,0],
+  ["CAR","Panthers","NFC","South",3,5,0], ["NO","Saints","NFC","South",3,5,0],
+  ["TB","Buccaneers","NFC","South",3,6,0], ["ATL","Falcons","NFC","South",3,6,0],
+  ["SF","49ers","NFC","West",7,1,0], ["LA","Rams","NFC","West",5,4,0],
+  ["SEA","Seahawks","NFC","West",5,4,0], ["ARI","Cardinals","NFC","West",3,6,0],
+];
+
+// Known remaining games, one per line: AWAY @ HOME
+// Paste more weeks here as you look them up (NFL.com schedule page).
+const SCHEDULE = `
+WAS @ NYG
+NE @ DET
+KC @ ATL
+BUF @ NYJ
+MIA @ IND
+MIN @ GB
+CAR @ NO
+JAC @ TEN
+HOU @ CLE
+SEA @ LV
+LA @ ARI
+SF @ DAL
+PIT @ CIN
+LAC @ BAL
+IND @ HOU
+`;
+
+/* =====================================================================
+   MODEL SETTINGS — try changing these and see how the odds move.
+   ===================================================================== */
+const SEASON_GAMES = 17;   // regular-season games per team
+const REGRESS_K    = 8;    // "phantom" .500 games added to each record (higher = more regression to mean)
+const HOME_EDGE    = 0.12; // home-field advantage in log-odds (~53% vs an equal team)
+const NOISE_SD     = 0.25; // per-season uncertainty in each team's true strength
+
+/* =====================================================================
+   ENGINE
+   ===================================================================== */
+const logistic = x => 1 / (1 + Math.exp(-x));
+
+// Standard normal random number (Box–Muller)
+function randn() {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function buildTeams() {
+  return TEAMS.map(([abbr, name, conf, div, w, l, t]) => {
+    const played = w + l + t;
+    const pct = (w + 0.5 * t + 0.5 * REGRESS_K) / (played + REGRESS_K); // regressed win %
+    return { abbr, name, conf, div: conf + " " + div, w, l, t, played,
+             strength: Math.log(pct / (1 - pct)) };           // log-odds strength
+  });
+}
+
+function parseSchedule(teams) {
+  const idx = Object.fromEntries(teams.map((t, i) => [t.abbr, i]));
+  const games = [];
+  for (const line of SCHEDULE.split("\n")) {
+    const m = line.trim().toUpperCase().match(/^([A-Z]+)\s*@\s*([A-Z]+)$/);
+    if (!m) continue;
+    if (!(m[1] in idx) || !(m[2] in idx)) { console.warn("Unknown team in:", line); continue; }
+    games.push([idx[m[1]], idx[m[2]]]);
+  }
+  return games;
+}
+
+// Simulate one playoff game; higher seed (a) hosts unless neutral.
+function playGame(sA, sB, neutral, str) {
+  const p = logistic(str[sA] - str[sB] + (neutral ? 0 : HOME_EDGE));
+  return Math.random() < p ? sA : sB;
+}
+
+function simulateConference(teams, wins, str, confName, out) {
+  const confIdx = teams.map((t, i) => i).filter(i => teams[i].conf === confName);
+  // Tiny random tiebreak so equal records are decided by coin flip
+  const score = {};
+  confIdx.forEach(i => score[i] = wins[i] + Math.random() * 0.01);
+  const byScore = (a, b) => score[b] - score[a];
+
+  const divisions = {};
+  confIdx.forEach(i => (divisions[teams[i].div] ||= []).push(i));
+  const winners = Object.values(divisions).map(d => d.sort(byScore)[0]).sort(byScore);
+  const others = confIdx.filter(i => !winners.includes(i)).sort(byScore);
+  const seeds = [...winners, ...others.slice(0, 3)]; // seeds[0] = #1 seed
+
+  winners.forEach(i => out.div[i]++);
+  seeds.forEach(i => out.playoff[i]++);
+  out.seed1[seeds[0]]++;
+
+  // Wild card round: 2v7, 3v6, 4v5. #1 seed gets a bye.
+  let alive = [seeds[0],
+    playGame(seeds[1], seeds[6], false, str),
+    playGame(seeds[2], seeds[5], false, str),
+    playGame(seeds[3], seeds[4], false, str)];
+  // Re-seed: best remaining seed hosts the worst remaining seed.
+  const seedOf = i => seeds.indexOf(i);
+  while (alive.length > 1) {
+    alive.sort((a, b) => seedOf(a) - seedOf(b));
+    const next = [];
+    for (let k = 0; k < alive.length / 2; k++)
+      next.push(playGame(alive[k], alive[alive.length - 1 - k], false, str));
+    alive = next;
+  }
+  return alive[0]; // conference champion
+}
+
+function runSims(N) {
+  const teams = buildTeams();
+  const games = parseSchedule(teams);
+  const n = teams.length;
+  const zeros = () => new Array(n).fill(0);
+  const out = { playoff: zeros(), div: zeros(), seed1: zeros(), sb: zeros(), totalW: zeros(),
+                hist: teams.map(() => new Array(SEASON_GAMES + 1).fill(0)) };
+
+  // How many games each team still needs beyond the known schedule
+  const known = zeros();
+  games.forEach(([a, h]) => { known[a]++; known[h]++; });
+  const filler = teams.map((t, i) => Math.max(0, SEASON_GAMES - t.played - known[i]));
+
+  for (let s = 0; s < N; s++) {
+    // 1) This season's "true" strengths = rating + noise
+    const str = teams.map(t => t.strength + NOISE_SD * randn());
+    const wins = teams.map(t => t.w + 0.5 * t.t);
+
+    // 2) Known games
+    for (const [a, h] of games) {
+      const pHome = logistic(str[h] - str[a] + HOME_EDGE);
+      if (Math.random() < pHome) wins[h]++; else wins[a]++;
+    }
+    // 3) Unknown games vs a league-average opponent (strength 0, neutral)
+    for (let i = 0; i < n; i++)
+      for (let g = 0; g < filler[i]; g++)
+        if (Math.random() < logistic(str[i])) wins[i]++;
+
+    // 4) Record results
+    for (let i = 0; i < n; i++) {
+      out.totalW[i] += wins[i];
+      out.hist[i][Math.min(SEASON_GAMES, Math.floor(wins[i]))]++;
+    }
+    // 5) Playoffs + Super Bowl (neutral site)
+    const afc = simulateConference(teams, wins, str, "AFC", out);
+    const nfc = simulateConference(teams, wins, str, "NFC", out);
+    out.sb[playGame(afc, nfc, true, str)]++;
+  }
+
+  return teams.map((t, i) => ({
+    ...t, i,
+    rec: t.w + (t.t ? 0.5 * t.t : 0) - t.l * 0.001, // sort key
+    recStr: `${t.w}-${t.l}${t.t ? "-" + t.t : ""}`,
+    projW: out.totalW[i] / N,
+    playoff: out.playoff[i] / N, div: out.div[i] / N,
+    seed1: out.seed1[i] / N, sb: out.sb[i] / N,
+    hist: out.hist[i].map(c => c / N),
+  }));
+}
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+let results = [], sortKey = "playoff", selected = null;
+const pct = x => x >= 0.995 ? ">99%" : x < 0.005 && x > 0 ? "<1%" : Math.round(x * 100) + "%";
+
+function render() {
+  const conf = document.getElementById("conf").value;
+  const rows = results.filter(r => conf === "ALL" || r.conf === conf)
+    .sort((a, b) => sortKey === "name" ? a.name.localeCompare(b.name) : b[sortKey] - a[sortKey]);
+  document.getElementById("tbody").innerHTML = rows.map(r => `
+    <tr class="${selected === r.i ? "sel" : ""}">
+      <td class="team" data-i="${r.i}">${r.abbr} <span class="div">${r.div}</span></td>
+      <td>${r.recStr}</td>
+      <td>${r.projW.toFixed(1)}</td>
+      <td>${pct(r.playoff)}<span class="bar" style="width:${r.playoff * 50}px"></span></td>
+      <td>${pct(r.div)}</td>
+      <td>${pct(r.seed1)}</td>
+      <td>${pct(r.sb)}</td>
+    </tr>`).join("");
+  document.querySelectorAll("td.team").forEach(td =>
+    td.onclick = () => { selected = +td.dataset.i; render(); renderDetail(); });
+}
+
+function renderDetail() {
+  const r = results.find(x => x.i === selected);
+  if (!r) return;
+  document.getElementById("d-title").textContent = `${r.name} — final win distribution`;
+  const lo = r.w, hi = SEASON_GAMES - r.l;
+  const slice = r.hist.slice(lo, hi + 1), max = Math.max(...slice);
+  document.getElementById("hist").innerHTML =
+    slice.map((p, k) => `<div title="${lo + k} wins: ${(p * 100).toFixed(1)}%" style="height:${(p / max) * 100}%"></div>`).join("");
+  document.getElementById("histx").innerHTML = slice.map((_, k) => `<span>${lo + k}</span>`).join("");
+  const mode = lo + slice.indexOf(max);
+  document.getElementById("d-stats").innerHTML = [
+    ["Current record", r.recStr], ["Projected wins", r.projW.toFixed(1)],
+    ["Most likely finish", `${mode}-${SEASON_GAMES - mode}`],
+    ["Make playoffs", pct(r.playoff)], ["Win division", pct(r.div)],
+    ["#1 seed (bye)", pct(r.seed1)], ["Win Super Bowl", pct(r.sb)],
+  ].map(([k, v]) => `<div class="stat"><span>${k}</span><b>${v}</b></div>`).join("");
+}
+
+function run() {
+  const N = +document.getElementById("nsims").value;
+  const status = document.getElementById("status");
+  status.textContent = "simulating…";
+  setTimeout(() => {
+    const t0 = performance.now();
+    results = runSims(N);
+    status.textContent = `${N.toLocaleString()} seasons in ${Math.round(performance.now() - t0)} ms`;
+    if (selected === null) selected = results.find(r => r.abbr === "CHI").i;
+    render(); renderDetail();
+  }, 20);
+}
+
+document.getElementById("run").onclick = run;
+document.getElementById("conf").onchange = render;
+document.querySelectorAll("th").forEach(th => th.onclick = () => { sortKey = th.dataset.k; render(); });
+run();
+</script>
+</body>
+</html>
